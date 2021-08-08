@@ -1,3 +1,2 @@
-import { isValidDate } from "./isValidDate";
-
-export { isValidDate };
+export { isValidDate } from "./isValidDate";
+export { getEmojiLetter } from "./getEmojiLetter";

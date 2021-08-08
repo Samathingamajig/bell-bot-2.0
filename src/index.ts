@@ -1,97 +1,40 @@
 require("dotenv").config();
-import { Client, Intents } from "discord.js";
-import { createConnection, getConnection } from "typeorm";
-import { Block } from "./entities/Block";
-import { isValidDate } from "./utils/isValidDate";
+import { Client, Intents, TextChannel } from "discord.js";
+import { createConnection } from "typeorm";
+import { dailyBlockMessage } from "./scripts/dailyBlockMessage";
+import * as rawCommands from "./commands";
+import { Command } from "./commands/command.d";
+const commands: Map<keyof typeof rawCommands, Command> = new Map();
+for (const command of Object.values(rawCommands)) {
+  commands.set(command.name as keyof typeof rawCommands, command);
+}
+
+const guildId = "873704352802541608";
+const channelId = "873704352802541611";
 
 const discordBot = new Client({
-  intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES],
+  intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES, Intents.FLAGS.GUILD_MESSAGE_REACTIONS],
 });
 
 discordBot.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
-  if (!message.cleanContent.startsWith("!")) return;
-  const command = message.cleanContent.split(" ")[0].substring(1);
-  const args = message.cleanContent.split(" ").slice(1);
+  if (!discordBot.application?.owner) await discordBot.application?.fetch();
 
-  if (command === "ab") {
-    if (args.length !== 2) {
-      message.channel.send("Invalid number of arguments (expected 2)");
-      return;
+  if (message.content.toLowerCase() === "!deploy" && message.author.id === discordBot.application?.owner?.id) {
+    const guild = discordBot.guilds.cache.get(guildId);
+    if (!guild) return;
+    for (const command of commands.values()) {
+      const response = await guild.commands.create(command);
+      console.log(response);
     }
-    const month = parseInt(args[0]);
-    const day = parseInt(args[1]);
+  }
+});
 
-    if (isNaN(month) || isNaN(day)) {
-      message.channel.send("Invalid arguments (expected numbers)");
-      return;
-    }
+discordBot.on("interactionCreate", async (interaction) => {
+  if (!interaction.isCommand()) return;
 
-    if (!isValidDate(month, day)) {
-      message.channel.send(`Invalid date${month === 2 && day === 0 ? " (maybe an issue with leap year)" : ""}`);
-      return;
-    }
-
-    const block = await Block.findOne({ where: { month, day } });
-    if (block) {
-      message.channel.send(`${block.block}`);
-      return;
-    } else {
-      message.channel.send("No block found");
-      return;
-    }
-  } else if (command === "set") {
-    if (args.length !== 3) {
-      message.channel.send("Invalid number of arguments (expected 3)");
-      return;
-    }
-    const month = parseInt(args[0]);
-    const day = parseInt(args[1]);
-    const block = args[2];
-    if (isNaN(month) || isNaN(day) || block.length !== 1) {
-      message.channel.send("Invalid arguments (expected 2 numbers, and 1 char)");
-      return;
-    }
-    const blockExists = await Block.findOne({ where: { month, day } });
-    if (blockExists) {
-      blockExists.block = block;
-      await blockExists.save();
-    } else {
-      const newBlock = Block.create({ month, day, block, year: new Date().getFullYear() });
-      await newBlock.save();
-    }
-
-    message.channel.send(`${month} ${day} set to ${block}`);
-  } else if (command === "del") {
-    if (args.length !== 2) {
-      message.channel.send("Invalid number of arguments (expected 2)");
-      return;
-    }
-    const month = parseInt(args[0]);
-    const day = parseInt(args[1]);
-    if (isNaN(month) || isNaN(day)) {
-      message.channel.send("Invalid arguments (expected numbers)");
-      return;
-    }
-    try {
-      const deletion = await getConnection()
-        .createQueryBuilder()
-        .delete()
-        .from(Block)
-        .where({ month, day })
-        .returning("*")
-        .execute();
-      if (deletion.raw.length === 0) {
-        message.channel.send("No block found");
-        return;
-      } else {
-        message.channel.send(`${month} ${day} deleted!`);
-        return;
-      }
-    } catch (e) {
-      message.channel.send("Error deleting");
-      console.log(e);
-    }
+  const command = commands.get(interaction.commandName as keyof typeof rawCommands);
+  if (command) {
+    command.execute(interaction);
   }
 });
 
@@ -102,4 +45,14 @@ discordBot.on("messageCreate", async (message) => {
 
   await discordBot.login(process.env.DISCORD_TOKEN);
   console.log("Discord bot connected");
+
+  const channel = (await discordBot.channels.fetch(channelId)) as TextChannel | null;
+  if (channel == null) {
+    console.log("Channel not found");
+    discordBot.destroy();
+    return;
+  }
+
+  const dailyBlockMessageIntervalFunction = dailyBlockMessage(channel);
+  setInterval(dailyBlockMessageIntervalFunction, 1000 * 10);
 })();
